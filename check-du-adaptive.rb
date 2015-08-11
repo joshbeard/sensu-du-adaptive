@@ -110,9 +110,10 @@ class CheckDisk < Sensu::Plugin::Check::CLI
   #
   def initialize
     super
-    @crit_fs = {}
-    @warn_fs = {}
-    @ok_fs = {}
+    @crit_fs = []
+    @warn_fs = []
+    @ok_fs = []
+    @fs = {}
   end
 
   # Get mount data
@@ -141,6 +142,7 @@ class CheckDisk < Sensu::Plugin::Check::CLI
 
   def check_mount(line)
     fs_info = Filesystem.stat(line.mount_point)
+    @fs[line.mount_point] = {}
     if fs_info.respond_to?(:inodes) # needed for windows
       percent_i = percent_inodes(fs_info)
       inode_hash = {
@@ -149,15 +151,17 @@ class CheckDisk < Sensu::Plugin::Check::CLI
         'used'         => (fs_info.inodes - fs_info.inodes_free),
         'used_percent' => percent_i,
       }
+      @fs[line.mount_point]['inode'] = inode_hash
+
       if percent_i >= config[:icrit]
-        @crit_fs[line.mount_point] = {}
-        @crit_fs[line.mount_point]['inode'] = inode_hash
+        @fs[line.mount_point]['inode']['status'] = 'critical'
+        @crit_fs << @fs[line.mount_point]
       elsif percent_i >= config[:iwarn]
-        @warn_fs[line.mount_point] = {}
-        @warn_fs[line.mount_point]['inode'] = inode_hash
+        @fs[line.mount_point]['inode']['status'] = 'warning'
+        @warn_fs << @fs[line.mount_point]
       else
-        @ok_fs[line.mount_point] = {}
-        @ok_fs[line.mount_point]['inode'] = inode_hash
+        @fs[line.mount_point]['inode']['status'] = 'ok'
+        @ok_fs << @fs[line.mount_point]
       end
     end
     percent_b = percent_bytes(fs_info)
@@ -180,13 +184,17 @@ class CheckDisk < Sensu::Plugin::Check::CLI
       'warn_size'    => fs_info.bytes_total * (adj_warn * 0.01),
       'crit_size'    => fs_info.bytes_total * (adj_crit * 0.01),
     }
+    @fs[line.mount_point]['bytes'] = bytes_hash
 
     if percent_b >= adj_crit
-      @crit_fs[line.mount_point]['bytes'] = bytes_hash
+      @fs[line.mount_point]['bytes']['status'] = 'critical'
+      @crit_fs << @fs[line.mount_point]
     elsif percent_b >= adj_warn
-      @warn_fs[line.mount_point]['bytes'] = bytes_hash
+      @fs[line.mount_point]['bytes']['status'] = 'warning'
+      @warn_fs << @fs[line.mount_point]
     else
-      @ok_fs[line.mount_point]['bytes'] = bytes_hash
+      @fs[line.mount_point]['bytes']['status'] = 'ok'
+      @ok_fs << @fs[line.mount_point]
     end
   end
 
@@ -215,20 +223,20 @@ class CheckDisk < Sensu::Plugin::Check::CLI
 
   # Generate output
   #
-  def usage_summary(what)
+  def usage_summary
     x = []
-    what.each do |fs,params|
+    @fs.each do |fs,params|
       if config[:verbose]
         x << [
-            "#{fs}: #{params['inode']['used_percent']}% inodes used ",
-            "(#{params['inode']['used']} of #{params['inode']['total']}); ",
-            "#{params['bytes']['used_percent']}% used ",
-            "(#{bytes_to_human(params['bytes']['used'])}",
-            " of #{bytes_to_human(params['bytes']['total'])}); ",
-            "warn=#{params['bytes']['warn_percent'].round(2)}% ",
-            "(" + bytes_to_human(params['bytes']['warn_size']).to_s + "),",
-            "crit=#{params['bytes']['crit_percent'].round(2)}% ",
-            "(" + bytes_to_human(params['bytes']['crit_size']).to_s + "); ",
+          "#{fs}: #{params['inode']['used_percent']}% inodes used ",
+          "(#{params['inode']['used']} of #{params['inode']['total']}) ",
+          "#{params['bytes']['used_percent']}% used ",
+          "(#{bytes_to_human(params['bytes']['used'])}",
+          " of #{bytes_to_human(params['bytes']['total'])}); ",
+          "warn=#{params['bytes']['warn_percent'].round(2)}% ",
+          "(" + bytes_to_human(params['bytes']['warn_size']).to_s + "),",
+          "crit=#{params['bytes']['crit_percent'].round(2)}% ",
+          "(" + bytes_to_human(params['bytes']['crit_size']).to_s + "); ",
         ].join
       else
         x << [
@@ -245,8 +253,9 @@ class CheckDisk < Sensu::Plugin::Check::CLI
   #
   def run
     fs_mounts
-    critical usage_summary(@crit_fs) unless @crit_fs.empty?
-    warning usage_summary(@warn_fs) unless @warn_fs.empty?
-    ok usage_summary(@ok_fs)
+    usage_summary
+    critical usage_summary unless @crit_fs.empty?
+    warning usage_summary unless @warn_fs.empty?
+    ok usage_summary unless @ok_fs.empty?
   end
 end
